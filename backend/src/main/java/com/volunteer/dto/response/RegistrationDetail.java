@@ -57,6 +57,18 @@ public class RegistrationDetail {
 
     private String currentApprovalNodeDesc;
 
+    /** 现场时效：必备证书是否存在已过有效期（昨天到期等），列表涂过期色用 */
+    private Boolean certExpired;
+
+    /** 现场时效：所属活动是否已散场（结束钟点已过） */
+    private Boolean activityEnded;
+
+    /** 现场时效：该单当前是否被拦（证件过期或活动散场），通过按钮必须置灰 */
+    private Boolean timeBlocked;
+
+    /** 被拦原因文案：证书已过期 / 活动已结束 */
+    private String blockReason;
+
     private List<ApprovalFlowDetail> approvalFlows;
 
     private LocalDateTime createdAt;

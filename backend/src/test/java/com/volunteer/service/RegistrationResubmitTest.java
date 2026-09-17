@@ -1,6 +1,7 @@
 package com.volunteer.service;
 
 import com.volunteer.dto.response.CapabilityCheckResult;
+import com.volunteer.entity.Activity;
 import com.volunteer.entity.Position;
 import com.volunteer.entity.Registration;
 import com.volunteer.enums.ApprovalNode;
@@ -46,6 +47,7 @@ class RegistrationResubmitTest {
     private RegistrationService registrationService;
 
     private Position position;
+    private Activity activity;
     private Registration returned;
 
     @BeforeEach
@@ -54,6 +56,11 @@ class RegistrationResubmitTest {
         position.setId(10L);
         position.setRequirementVersion(3);
         position.setRequiredCertificates("急救证");
+
+        activity = new Activity();
+        activity.setId(2L);
+        activity.setStatus(1);
+        activity.setEndTime(java.time.LocalDateTime.now().plusDays(1));
 
         returned = new Registration();
         returned.setId(100L);
@@ -77,14 +84,23 @@ class RegistrationResubmitTest {
         return r;
     }
 
-    @Test
-    void resubmit_passing_rebuilds_flows_from_leader_and_marks_pending() {
+    private void stubLocks() {
         when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
+        when(activityRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(activity));
         when(positionRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(position));
         when(registrationRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(returned));
-        when(capabilityValidationService.validateAgainstPosition(5L, position)).thenReturn(pass());
-        when(registrationRepository.save(returned)).thenReturn(returned);
+    }
+
+    private void stubLocksUpToActivity() {
         when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
+        when(activityRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(activity));
+    }
+
+    @Test
+    void resubmit_passing_rebuilds_flows_from_leader_and_marks_pending() {
+        stubLocks();
+        when(capabilityValidationService.validateAgainstContext(5L, position, activity)).thenReturn(pass());
+        when(registrationRepository.save(returned)).thenReturn(returned);
         when(approvalFlowRepository.findByRegistrationIdOrderByNodeLevelAsc(100L)).thenReturn(java.util.List.of());
 
         registrationService.resubmit(100L, "补了备注");
@@ -106,12 +122,9 @@ class RegistrationResubmitTest {
 
     @Test
     void resubmit_failing_is_rejected_and_creates_no_flow() {
-        when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
-        when(positionRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(position));
-        when(registrationRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(returned));
-        when(capabilityValidationService.validateAgainstPosition(5L, position)).thenReturn(fail());
+        stubLocks();
+        when(capabilityValidationService.validateAgainstContext(5L, position, activity)).thenReturn(fail());
         when(registrationRepository.save(returned)).thenReturn(returned);
-        when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
         when(approvalFlowRepository.findByRegistrationIdOrderByNodeLevelAsc(100L)).thenReturn(java.util.List.of());
 
         registrationService.resubmit(100L, null);
@@ -124,11 +137,19 @@ class RegistrationResubmitTest {
     }
 
     @Test
+    void resubmit_after_activity_ended_is_rejected() {
+        activity.setEndTime(java.time.LocalDateTime.now().minusMinutes(1));
+        stubLocksUpToActivity();
+        when(capabilityValidationService.isActivityEnded(activity)).thenReturn(true);
+
+        assertThrows(IllegalStateException.class, () -> registrationService.resubmit(100L, null));
+        verify(approvalFlowRepository, never()).deleteByRegistrationId(anyLong());
+    }
+
+    @Test
     void non_returned_registration_cannot_resubmit() {
         returned.setStatus(ApprovalStatus.PENDING.getCode());
-        when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
-        when(positionRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(position));
-        when(registrationRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(returned));
+        stubLocks();
 
         assertThrows(IllegalStateException.class, () -> registrationService.resubmit(100L, null));
         verify(approvalFlowRepository, never()).deleteByRegistrationId(anyLong());

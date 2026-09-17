@@ -22,7 +22,7 @@
         </el-select>
         <el-button @click="loadRegistrations">查询</el-button>
       </div>
-      <el-table :data="registrations" border>
+      <el-table :data="registrations" border :row-class-name="getRowClass">
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="volunteerName" label="志愿者" />
         <el-table-column prop="volunteerPhone" label="联系方式" />
@@ -38,6 +38,15 @@
                  :style="{ color: scope.row.recheckPass === 1 ? '#52c41a' : '#ff4d4f' }">
               新门槛{{ scope.row.recheckPass === 1 ? '复核通过' : '复核失败' }}
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="时效" width="130">
+          <template #default="scope">
+            <el-tag v-if="scope.row.certExpired" type="danger" size="small" effect="dark">证件已过期</el-tag>
+            <el-tag v-if="scope.row.activityEnded" type="info" size="small" effect="dark"
+                    :style="scope.row.certExpired ? 'margin-left:4px' : ''">活动已散场</el-tag>
+            <span v-if="!scope.row.certExpired && !scope.row.activityEnded"
+                  style="font-size: 12px; color: #52c41a;">正常</span>
           </template>
         </el-table-column>
         <el-table-column prop="currentApprovalNodeDesc" label="当前节点" width="120" />
@@ -100,6 +109,10 @@
         <div :style="{ color: capabilityCheckResult.hoursCheck?.includes('通过') ? '#52c41a' : '#ff4d4f' }">
           • {{ capabilityCheckResult.hoursCheck }}
         </div>
+        <div v-if="capabilityCheckResult.activityCheck"
+             :style="{ color: capabilityCheckResult.activityCheck.includes('通过') ? '#52c41a' : '#ff4d4f' }">
+          • {{ capabilityCheckResult.activityCheck }}
+        </div>
       </div>
 
       <template #footer>
@@ -157,6 +170,10 @@
             <div v-if="checkResultData" :style="{ color: checkResultData.hoursCheck?.includes('通过') ? '#52c41a' : '#ff4d4f' }">
               • {{ checkResultData.hoursCheck }}
             </div>
+            <div v-if="checkResultData?.activityCheck"
+                 :style="{ color: checkResultData.activityCheck.includes('通过') ? '#52c41a' : '#ff4d4f' }">
+              • {{ checkResultData.activityCheck }}
+            </div>
           </div>
         </el-col>
         <el-col v-if="recheckResultData" :span="12">
@@ -180,6 +197,10 @@
             </div>
             <div :style="{ color: recheckResultData.hoursCheck?.includes('通过') ? '#52c41a' : '#ff4d4f' }">
               • {{ recheckResultData.hoursCheck }}
+            </div>
+            <div v-if="recheckResultData.activityCheck"
+                 :style="{ color: recheckResultData.activityCheck.includes('通过') ? '#52c41a' : '#ff4d4f' }">
+              • {{ recheckResultData.activityCheck }}
             </div>
             <el-alert
               v-if="selectedRegistration?.recheckPass === 0"
@@ -221,6 +242,15 @@
           style="margin-top: 10px;"
           title="该单在岗位门槛更新后复核失败，已停在能力校验失败并让出名额，待门槛放宽重检通过后才能继续审批。"
         />
+        <el-alert
+          v-if="selectedRegistration?.timeBlocked"
+          :type="selectedRegistration.certExpired ? 'error' : 'warning'"
+          :closable="false"
+          style="margin-top: 10px;"
+          :title="`时效拦截：${selectedRegistration.blockReason}。${selectedRegistration.status === 4 || selectedRegistration.status === 1
+            ? '历史审批记录保留，但今晚排班满员人数不再计入该人。'
+            : '待审已停住、通过不成立并让出名额。'}`"
+        />
       </div>
 
       <div style="margin-top: 20px;" v-if="selectedRegistration?.status === 3">
@@ -261,6 +291,10 @@
         </div>
         <div :style="{ color: resubmitCheck.hoursCheck?.includes('通过') ? '#52c41a' : '#ff4d4f' }">
           • {{ resubmitCheck.hoursCheck }}
+        </div>
+        <div v-if="resubmitCheck.activityCheck"
+             :style="{ color: resubmitCheck.activityCheck.includes('通过') ? '#52c41a' : '#ff4d4f' }">
+          • {{ resubmitCheck.activityCheck }}
         </div>
       </div>
       <el-alert
@@ -369,9 +403,21 @@ const openApplyModal = () => {
 }
 
 const submitApply = async () => {
-  await registrationApi.create(applyForm.value)
-  applyModalVisible.value = false
-  loadRegistrations()
+  try {
+    await registrationApi.create(applyForm.value)
+    applyModalVisible.value = false
+    loadRegistrations()
+    ElMessage.success('报名成功')
+  } catch (e: unknown) {
+    const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+    ElMessage.error(msg || '报名失败')
+  }
+}
+
+const getRowClass = ({ row }: { row: RegistrationDetail }) => {
+  if (row.certExpired) return 'row-cert-expired'
+  if (row.activityEnded) return 'row-activity-ended'
+  return ''
 }
 
 const viewDetail = (registration: RegistrationDetail) => {
@@ -451,6 +497,19 @@ onMounted(() => {
 <style scoped>
 .registrations {
   padding: 20px;
+}
+
+:deep(.el-table .row-cert-expired) {
+  background-color: #fff1f0;
+}
+
+:deep(.el-table .row-cert-expired:hover > td) {
+  background-color: #ffd8d6 !important;
+}
+
+:deep(.el-table .row-activity-ended) {
+  background-color: #f4f4f5;
+  color: #909399;
 }
 
 .approval-flow {

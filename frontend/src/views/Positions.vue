@@ -26,7 +26,7 @@
             </span>
             <span style="color: #909399;"> / {{ scope.row.maxCount }}</span>
             <div style="font-size: 11px; color: #909399; line-height: 1.4;">
-              退回未重提、复核失败不计
+              退回未重提、复核失败、证件过期、活动散场均不计
             </div>
           </template>
         </el-table-column>

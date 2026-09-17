@@ -3,6 +3,7 @@ package com.volunteer.controller;
 import com.volunteer.dto.response.ApiResponse;
 import com.volunteer.entity.Activity;
 import com.volunteer.repository.ActivityRepository;
+import com.volunteer.service.TimeValiditySweepExecutor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -14,6 +15,9 @@ public class ActivityController {
 
     @Autowired
     private ActivityRepository activityRepository;
+
+    @Autowired
+    private TimeValiditySweepExecutor timeValiditySweepExecutor;
 
     @GetMapping
     public ApiResponse<List<Activity>> getAllActivities() {
@@ -47,7 +51,10 @@ public class ActivityController {
                     existing.setEndTime(activity.getEndTime());
                     existing.setLocation(activity.getLocation());
                     existing.setStatus(activity.getStatus());
-                    return ApiResponse.success(activityRepository.save(existing));
+                    Activity saved = activityRepository.save(existing);
+                    // 结束钟点改到当前之前或置为已结束：散场立即清场腾位，不用等定时扫描
+                    timeValiditySweepExecutor.settleActivity(id);
+                    return ApiResponse.success(saved);
                 })
                 .orElse(ApiResponse.error(404, "活动不存在"));
     }

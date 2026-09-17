@@ -12,10 +12,10 @@
         <el-table-column prop="location" label="活动地点" />
         <el-table-column prop="startTime" label="开始时间" />
         <el-table-column prop="endTime" label="结束时间" />
-        <el-table-column prop="status" label="状态" width="80">
+        <el-table-column prop="status" label="状态" width="120">
           <template #default="scope">
-            <el-tag :type="scope.row.status === 1 ? 'success' : 'info'">
-              {{ scope.row.status === 1 ? '进行中' : '已结束' }}
+            <el-tag :type="isEnded(scope.row) ? 'info' : 'success'">
+              {{ isEnded(scope.row) ? '已结束(散场)' : '进行中' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -83,6 +83,10 @@ const loadActivities = async () => {
   const res = await activityApi.getAll()
   activities.value = res.data || []
 }
+
+/** 散场口径：手工置为已结束，或结束钟点已过 —— 散场后新报名进不来、在途单被清场 */
+const isEnded = (a: Activity) =>
+  a.status === 0 || (!!a.endTime && new Date(a.endTime.replace(' ', 'T')) <= new Date())
 
 const openModal = () => {
   isEdit.value = false

@@ -28,13 +28,13 @@
         <el-statistic title="已驳回数量" :value="rejectedCount" />
       </div>
 
-      <el-table :data="approvals" border>
+      <el-table :data="approvals" border :row-class-name="getRowClass">
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="volunteerName" label="志愿者" />
         <el-table-column prop="volunteerPhone" label="联系方式" />
         <el-table-column prop="activityName" label="活动" />
         <el-table-column prop="positionName" label="岗位" />
-        <el-table-column label="能力校验" width="130">
+        <el-table-column label="能力校验" width="150">
           <template #default="scope">
             <el-tag :type="scope.row.effectivePass === 1 ? 'success' : 'danger'">
               {{ scope.row.effectivePassDesc }}
@@ -44,6 +44,19 @@
                  :style="{ color: scope.row.recheckPass === 1 ? '#52c41a' : '#ff4d4f' }">
               新门槛{{ scope.row.recheckPass === 1 ? '复核通过' : '复核失败' }}
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="时效" width="130">
+          <template #default="scope">
+            <el-tag v-if="scope.row.certExpired" type="danger" size="small" effect="dark">
+              证件已过期
+            </el-tag>
+            <el-tag v-if="scope.row.activityEnded" type="info" size="small" effect="dark"
+                    :style="scope.row.certExpired ? 'margin-left:4px' : ''">
+              活动已散场
+            </el-tag>
+            <span v-if="!scope.row.certExpired && !scope.row.activityEnded"
+                  style="font-size: 12px; color: #52c41a;">正常</span>
           </template>
         </el-table-column>
         <el-table-column prop="currentApprovalNodeDesc" label="当前节点" width="120" />
@@ -70,10 +83,13 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="250">
+        <el-table-column label="操作" width="300">
           <template #default="scope">
             <el-button size="small" @click="viewDetail(scope.row)">详情</el-button>
             <el-button v-if="canApprove(scope.row)" size="small" type="primary" @click="openApprovalModal(scope.row)">审批</el-button>
+            <el-tag v-else-if="scope.row.timeBlocked" type="danger" size="small">
+              {{ scope.row.blockReason }}·通过已锁死
+            </el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -117,6 +133,15 @@
         title="岗位门槛已更新，该单复核失败并停在能力校验失败：通过动作不成立、名额已让出；门槛放宽重检通过后方可继续。"
       />
       <el-alert
+        v-if="selectedApproval?.timeBlocked"
+        :type="selectedApproval.certExpired ? 'error' : 'warning'"
+        :closable="false"
+        style="margin-top: 12px;"
+        :title="`时效拦截：${selectedApproval.blockReason}。${selectedApproval.status === 4 || selectedApproval.status === 1
+          ? '历史审批记录保留，但不计入今晚排班满员人数。'
+          : '待审停住、通过不成立并已让出名额。'}`"
+      />
+      <el-alert
         v-else-if="selectedApproval?.status === 3"
         type="warning"
         :closable="false"
@@ -147,6 +172,10 @@
                 <div :style="{ color: checkResultData.hoursCheck?.includes('通过') ? '#52c41a' : '#ff4d4f' }">
                   • {{ checkResultData.hoursCheck }}
                 </div>
+                <div v-if="checkResultData.activityCheck"
+                     :style="{ color: checkResultData.activityCheck.includes('通过') ? '#52c41a' : '#ff4d4f' }">
+                  • {{ checkResultData.activityCheck }}
+                </div>
               </template>
             </div>
           </el-col>
@@ -163,6 +192,10 @@
                    :style="{ color: item.includes('通过') ? '#52c41a' : '#ff4d4f' }">• {{ item }}</div>
               <div :style="{ color: recheckResultData.hoursCheck?.includes('通过') ? '#52c41a' : '#ff4d4f' }">
                 • {{ recheckResultData.hoursCheck }}
+              </div>
+              <div v-if="recheckResultData.activityCheck"
+                   :style="{ color: recheckResultData.activityCheck.includes('通过') ? '#52c41a' : '#ff4d4f' }">
+                • {{ recheckResultData.activityCheck }}
               </div>
             </div>
           </el-col>
@@ -214,6 +247,13 @@
     </el-dialog>
 
     <el-dialog v-model="approvalModalVisible" title="审批操作" width="500px">
+      <el-alert
+        v-if="selectedApproval?.timeBlocked"
+        type="error"
+        :closable="false"
+        style="margin-bottom: 16px;"
+        :title="`${selectedApproval.blockReason}：通过不成立。在途单停在能力校验失败并让出名额；已批完者保留历史记录但不计满员。`"
+      />
       <el-form :model="approvalForm" label-width="80px">
         <el-form-item label="审批人">
           <el-input v-model="approvalForm.approverName" />
@@ -224,9 +264,9 @@
       </el-form>
       <template #footer>
         <el-button @click="approvalModalVisible = false">取消</el-button>
-        <el-button type="warning" @click="handleReturn">退回修改</el-button>
-        <el-button type="danger" @click="handleReject">驳回</el-button>
-        <el-button type="primary" @click="handlePass">通过</el-button>
+        <el-button type="warning" :disabled="selectedApproval?.timeBlocked" @click="handleReturn">退回修改</el-button>
+        <el-button type="danger" :disabled="selectedApproval?.timeBlocked" @click="handleReject">驳回</el-button>
+        <el-button type="primary" :disabled="selectedApproval?.timeBlocked" @click="handlePass">通过</el-button>
       </template>
     </el-dialog>
   </div>
@@ -348,9 +388,16 @@ const handleReturn = async () => {
 }
 
 const canApprove = (approval: RegistrationDetail) => {
-  // 只有待审批且有效校验（新门槛复核优先）通过的单才能批；
-  // 退回修改未重提、能力校验失败（含复核失败）一律卡不住“通过”
-  return approval.status === 0 && approval.effectivePass === 1
+  // 只有待审批、有效校验（新门槛复核优先）通过、且证件未过期/活动未散场的单才能批；
+  // 退回修改未重提、能力校验失败（含复核失败）一律卡住「通过」
+  return approval.status === 0 && approval.effectivePass === 1 && !approval.timeBlocked
+}
+
+const getRowClass = ({ row }: { row: RegistrationDetail }) => {
+  // 列表上涂过期色：证件过期红、活动散场灰
+  if (row.certExpired) return 'row-cert-expired'
+  if (row.activityEnded) return 'row-activity-ended'
+  return ''
 }
 
 const getStatusType = (status: number) => {
@@ -426,6 +473,19 @@ onMounted(loadApprovals)
 <style scoped>
 .approvals {
   padding: 20px;
+}
+
+:deep(.el-table .row-cert-expired) {
+  background-color: #fff1f0;
+}
+
+:deep(.el-table .row-cert-expired:hover > td) {
+  background-color: #ffd8d6 !important;
+}
+
+:deep(.el-table .row-activity-ended) {
+  background-color: #f4f4f5;
+  color: #909399;
 }
 
 .progress-bar {

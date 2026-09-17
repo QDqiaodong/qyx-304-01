@@ -53,9 +53,16 @@ public class RegistrationController {
 
     @PostMapping
     public ApiResponse<RegistrationDetail> createRegistration(@RequestBody RegistrationRequest request) {
-        Registration registration = registrationService.createRegistration(request);
-        RegistrationDetail detail = registrationService.getRegistrationDetail(registration.getId());
-        return ApiResponse.success(detail);
+        try {
+            Registration registration = registrationService.createRegistration(request);
+            RegistrationDetail detail = registrationService.getRegistrationDetail(registration.getId());
+            return ApiResponse.success(detail);
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.error(404, e.getMessage());
+        } catch (IllegalStateException e) {
+            // 活动已散场等：新报名失败，不产生任何报名单
+            return ApiResponse.error(400, e.getMessage());
+        }
     }
 
     /**

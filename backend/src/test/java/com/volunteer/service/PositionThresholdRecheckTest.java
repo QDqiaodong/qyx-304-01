@@ -47,6 +47,18 @@ class PositionThresholdRecheckTest {
     @InjectMocks
     private PositionService positionService;
 
+    /** 走真实的现场复核落账口径（其内部能力校验仍用 mock），避免双份结局逻辑漂移 */
+    private RegistrationLiveCheckService liveCheck;
+
+    @BeforeEach
+    void wireLiveCheck() {
+        liveCheck = new RegistrationLiveCheckService();
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                liveCheck, "capabilityValidationService", capabilityValidationService);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                positionService, "registrationLiveCheckService", liveCheck);
+    }
+
     private Position existing;
 
     @BeforeEach

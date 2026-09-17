@@ -1,10 +1,7 @@
 package com.volunteer.service;
 
-import com.alibaba.fastjson.JSON;
-import com.volunteer.dto.response.CapabilityCheckResult;
 import com.volunteer.entity.Position;
 import com.volunteer.entity.Registration;
-import com.volunteer.enums.ApprovalNode;
 import com.volunteer.enums.ApprovalStatus;
 import com.volunteer.repository.PositionRepository;
 import com.volunteer.repository.RegistrationRepository;
@@ -46,7 +43,7 @@ public class PositionService {
     private RegistrationRepository registrationRepository;
 
     @Autowired
-    private CapabilityValidationService capabilityValidationService;
+    private RegistrationLiveCheckService registrationLiveCheckService;
 
     @Autowired
     private PositionCacheService positionCacheService;
@@ -100,46 +97,16 @@ public class PositionService {
 
     /**
      * 门槛已在本事务内落库（岗位行锁持有中），对在途/已批报名逐单复核。
-     * 入参 position 为行锁读出的最新岗位，志愿者技能/证书/时长也在同一快照读取。
+     * 入参 position 为行锁读出的最新岗位，志愿者技能/证书（含有效期）/时长也在同一快照读取。
      */
     private void recheckInTransaction(Position position) {
         List<Registration> registrations = registrationRepository.findByPositionIdAndStatusInForUpdate(
                 position.getId(), RECHECK_STATUSES);
 
         for (Registration registration : registrations) {
-            CapabilityCheckResult result = capabilityValidationService.validateAgainstPosition(
-                    registration.getVolunteerId(), position);
-
-            registration.setRecheckResult(JSON.toJSONString(result));
-            registration.setRecheckPass(result.getPass() ? 1 : 0);
-
-            Integer status = registration.getStatus();
-            if (result.getPass()) {
-                // 此前因收紧被卡在能力校验失败的在途单，放宽后恢复到被卡前节点重新占编
-                if (ApprovalStatus.CHECK_FAILED.getCode().equals(status)
-                        && registration.getResumeNode() != null) {
-                    registration.setStatus(ApprovalStatus.PENDING.getCode());
-                    registration.setCurrentApprovalNode(registration.getResumeNode());
-                    registration.setResumeNode(null);
-                }
-                // 已批完的人复核通过：审批结果不动，继续占编
-                registrationRepository.save(registration);
-            } else {
-                if (ApprovalStatus.COMPLETED.getCode().equals(status)
-                        || ApprovalStatus.APPROVED.getCode().equals(status)) {
-                    // 已经批完的人不必清退：保留审批结果与节点，仅靠 recheckPass=0 让出满员名额；
-                    // save 必须执行，否则复核失败结论不落库、名额仍被占着
-                    registrationRepository.save(registration);
-                    continue;
-                }
-                // 在途单（含此前被卡的）：停在能力校验失败，通过动作直接不成立
-                if (!ApprovalStatus.CHECK_FAILED.getCode().equals(status)) {
-                    registration.setResumeNode(registration.getCurrentApprovalNode());
-                }
-                registration.setStatus(ApprovalStatus.CHECK_FAILED.getCode());
-                registration.setCurrentApprovalNode(ApprovalNode.CAPABILITY_CHECK.getLevel());
-                registrationRepository.save(registration);
-            }
+            // 统一现场复核口径：技能/证书/时长门槛 + 证书时效 + 活动时效；结论必须落库
+            registrationLiveCheckService.settle(registration, position, null);
+            registrationRepository.save(registration);
         }
     }
 

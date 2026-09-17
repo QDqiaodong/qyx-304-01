@@ -46,10 +46,20 @@ public class RegistrationService {
 
     @Transactional
     public Registration createRegistration(RegistrationRequest request) {
-        CapabilityCheckResult checkResult = capabilityValidationService.validate(
-                request.getVolunteerId(), request.getPositionId());
+        // 锁顺序与散场扫描、通过动作一致：先活动后岗位，杜绝「散场瞬间新报名仍送进来」
+        Activity activity = activityRepository.findByIdForUpdate(request.getActivityId()).orElse(null);
+        if (activity == null) {
+            throw new IllegalArgumentException("活动不存在");
+        }
+        if (capabilityValidationService.isActivityEnded(activity)) {
+            throw new IllegalStateException("活动已结束，新报名失败");
+        }
 
-        Position position = positionRepository.findById(request.getPositionId()).orElse(null);
+        Position position = positionRepository.findByIdForUpdate(request.getPositionId()).orElse(null);
+
+        // 持锁现场校验：最新门槛 + 证书有效期 + 活动时效，三者任一不过即驳回、不占名额
+        CapabilityCheckResult checkResult = capabilityValidationService.validateAgainstContext(
+                request.getVolunteerId(), position, activity);
 
         Registration registration = new Registration();
         registration.setVolunteerId(request.getVolunteerId());
@@ -75,7 +85,9 @@ public class RegistrationService {
             approvalFlowService.createApprovalFlow(registration.getId());
         }
 
-        positionCacheService.cachePositionCapability(request.getPositionId());
+        if (position != null) {
+            positionCacheService.cachePositionCapability(request.getPositionId());
+        }
 
         return registration;
     }
@@ -93,7 +105,13 @@ public class RegistrationService {
             throw new IllegalArgumentException("报名单不存在");
         }
 
-        // 锁顺序与改门槛、通过动作一致：先岗位后报名，防止互锁
+        // 锁顺序与改门槛、通过、散场扫描一致：先活动，再岗位，最后报名，防止互锁
+        Activity activity = activityRepository.findByIdForUpdate(unlocked.getActivityId())
+                .orElseThrow(() -> new IllegalArgumentException("活动不存在"));
+        if (capabilityValidationService.isActivityEnded(activity)) {
+            throw new IllegalStateException("活动已结束，无法重新送审");
+        }
+
         Position position = positionRepository.findByIdForUpdate(unlocked.getPositionId())
                 .orElseThrow(() -> new IllegalArgumentException("岗位不存在"));
 
@@ -103,8 +121,9 @@ public class RegistrationService {
             throw new IllegalStateException("只有退回修改的报名单可以重新送审");
         }
 
-        CapabilityCheckResult checkResult =
-                capabilityValidationService.validateAgainstPosition(registration.getVolunteerId(), position);
+        // 持锁现场校验：当前门槛 + 证书有效期 + 活动时效
+        CapabilityCheckResult checkResult = capabilityValidationService.validateAgainstContext(
+                registration.getVolunteerId(), position, activity);
 
         if (applyMessage != null) {
             registration.setApplyMessage(applyMessage);
@@ -159,6 +178,31 @@ public class RegistrationService {
         if (position != null) {
             detail.setPositionName(position.getName());
             detail.setCurrentRequirementVersion(position.getRequirementVersion());
+        }
+
+        // 现场时效（非报名时快照）：证件是否过期、活动是否散场，决定列表过期色与通过按钮是否还活着
+        boolean activityEnded = activity != null && capabilityValidationService.isActivityEnded(activity);
+        boolean certExpired = position != null
+                && capabilityValidationService.hasExpiredRequiredCertificate(
+                        registration.getVolunteerId(), position);
+        detail.setActivityEnded(activityEnded);
+        detail.setCertExpired(certExpired);
+
+        boolean occupyingLike = ApprovalStatus.PENDING.getCode().equals(registration.getStatus())
+                || ApprovalStatus.APPROVED.getCode().equals(registration.getStatus())
+                || ApprovalStatus.COMPLETED.getCode().equals(registration.getStatus())
+                || ApprovalStatus.CHECK_FAILED.getCode().equals(registration.getStatus());
+        boolean timeBlocked = occupyingLike && (activityEnded || certExpired);
+        detail.setTimeBlocked(timeBlocked);
+        if (timeBlocked) {
+            List<String> reasons = new ArrayList<>();
+            if (certExpired) {
+                reasons.add("必备证书已过有效期");
+            }
+            if (activityEnded) {
+                reasons.add("活动已散场");
+            }
+            detail.setBlockReason(String.join("、", reasons));
         }
 
         detail.setApplyMessage(registration.getApplyMessage());

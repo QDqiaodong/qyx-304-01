@@ -7,6 +7,7 @@ import com.volunteer.entity.VolunteerSkill;
 import com.volunteer.repository.VolunteerCertificateRepository;
 import com.volunteer.repository.VolunteerRepository;
 import com.volunteer.repository.VolunteerSkillRepository;
+import com.volunteer.service.TimeValiditySweepExecutor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,6 +27,9 @@ public class VolunteerController {
 
     @Autowired
     private VolunteerCertificateRepository volunteerCertificateRepository;
+
+    @Autowired
+    private TimeValiditySweepExecutor timeValiditySweepExecutor;
 
     @GetMapping
     public ApiResponse<List<Volunteer>> getAllVolunteers() {
@@ -93,7 +97,38 @@ public class VolunteerController {
     @PostMapping("/{id}/certificates")
     public ApiResponse<VolunteerCertificate> addCertificate(@PathVariable Long id, @RequestBody VolunteerCertificate certificate) {
         certificate.setVolunteerId(id);
-        return ApiResponse.success(volunteerCertificateRepository.save(certificate));
+        VolunteerCertificate saved = volunteerCertificateRepository.save(certificate);
+        // 新录入证书可能是续期：持锁立即复核该志愿者相关在途/已批单，通过即恢复占编
+        timeValiditySweepExecutor.settleVolunteerCertificates(id);
+        return ApiResponse.success(saved);
+    }
+
+    /**
+     * 修改证书（含有效期）。证书时效在报名/通过/扫描时现场判定，
+     * 改到昨天即过期，待审停校验、已批不计满员；续期后下一轮扫描恢复占编。
+     */
+    @PutMapping("/{id}/certificates/{certId}")
+    public ApiResponse<VolunteerCertificate> updateCertificate(@PathVariable Long id,
+                                                                @PathVariable Long certId,
+                                                                @RequestBody VolunteerCertificate input) {
+        java.util.Optional<VolunteerCertificate> found = volunteerCertificateRepository.findById(certId);
+        if (found.isEmpty()) {
+            return ApiResponse.error(404, "证书不存在");
+        }
+        VolunteerCertificate existing = found.get();
+        if (!existing.getVolunteerId().equals(id)) {
+            return ApiResponse.error(404, "证书不存在");
+        }
+        if (input.getCertName() != null) {
+            existing.setCertName(input.getCertName());
+        }
+        existing.setCertNo(input.getCertNo());
+        existing.setIssueDate(input.getIssueDate());
+        existing.setExpireDate(input.getExpireDate());
+        VolunteerCertificate saved = volunteerCertificateRepository.save(existing);
+        // 有效期改到昨天立即腾位、续期立即恢复：持锁现场复核，不用等定时扫描
+        timeValiditySweepExecutor.settleVolunteerCertificates(id);
+        return ApiResponse.success(saved);
     }
 
     @GetMapping("/{id}/certificates")

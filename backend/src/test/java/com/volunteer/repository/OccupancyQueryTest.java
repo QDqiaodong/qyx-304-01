@@ -1,5 +1,6 @@
 package com.volunteer.repository;
 
+import com.volunteer.entity.Activity;
 import com.volunteer.entity.ApprovalFlow;
 import com.volunteer.entity.Position;
 import com.volunteer.entity.Registration;
@@ -11,10 +12,12 @@ import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabas
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 校验占编统计与行锁 JPQL 在真实 ORM + 数据库上可执行、口径正确：
@@ -31,6 +34,8 @@ class OccupancyQueryTest {
     private RegistrationRepository registrationRepository;
     @Autowired
     private ApprovalFlowRepository approvalFlowRepository;
+    @Autowired
+    private ActivityRepository activityRepository;
 
     private Registration reg(Long posId, int status, Integer checkPass, Integer recheckPass) {
         Registration r = new Registration();
@@ -103,8 +108,7 @@ class OccupancyQueryTest {
     }
 
     @Test
-    void delete_flows_by_registration_id_for_resubmit_rebuild() {
-        Position p = positionRepository.saveAndFlush(buildPosition());
+    void delete_flows_by_registration_id_for_resubmit_rebuild() {        Position p = positionRepository.saveAndFlush(buildPosition());
         Registration r = registrationRepository.saveAndFlush(reg(p.getId(), ApprovalStatus.PENDING.getCode(), 1, null));
         for (ApprovalNode node : List.of(ApprovalNode.CAPABILITY_CHECK, ApprovalNode.LEADER, ApprovalNode.MANAGER)) {
             ApprovalFlow flow = new ApprovalFlow();
@@ -120,6 +124,49 @@ class OccupancyQueryTest {
         approvalFlowRepository.flush();
 
         assertEquals(0, approvalFlowRepository.findByRegistrationId(r.getId()).size());
+    }
+
+    @Test
+    void ended_activity_queries_and_activity_lock_queries_execute() {
+        Activity ongoing = new Activity();
+        ongoing.setName("进行中的活动");
+        ongoing.setStartTime(LocalDateTime.now().minusDays(1));
+        ongoing.setEndTime(LocalDateTime.now().plusDays(1));
+        ongoing.setStatus(1);
+        ongoing = activityRepository.saveAndFlush(ongoing);
+
+        Activity ended = new Activity();
+        ended.setName("已散场的活动");
+        ended.setStartTime(LocalDateTime.now().minusDays(2));
+        ended.setEndTime(LocalDateTime.now().minusHours(1));
+        ended.setStatus(1);
+        ended = activityRepository.saveAndFlush(ended);
+
+        Activity manuallyEnded = new Activity();
+        manuallyEnded.setName("手工结束的活动");
+        manuallyEnded.setStartTime(LocalDateTime.now().plusDays(1));
+        manuallyEnded.setEndTime(LocalDateTime.now().plusDays(2));
+        manuallyEnded.setStatus(0);
+        manuallyEnded = activityRepository.saveAndFlush(manuallyEnded);
+
+        List<Long> endedIds = activityRepository.findEndedActivities().stream().map(Activity::getId).toList();
+        assertTrue(endedIds.contains(ended.getId()));
+        assertTrue(endedIds.contains(manuallyEnded.getId()));
+        assertEquals(false, endedIds.contains(ongoing.getId()));
+
+        // 活动行锁与活动维度报名锁/计数必须可执行
+        assertNotNull(activityRepository.findByIdForUpdate(ended.getId()).orElse(null));
+
+        Position p = buildPosition();
+        p.setActivityId(ended.getId());
+        p = positionRepository.saveAndFlush(p);
+        Registration occupying = reg(p.getId(), ApprovalStatus.PENDING.getCode(), 1, null);
+        occupying.setActivityId(ended.getId());
+        registrationRepository.saveAndFlush(occupying);
+        List<Registration> locked = registrationRepository.findByActivityIdAndStatusInForUpdate(
+                ended.getId(), List.of(ApprovalStatus.PENDING.getCode()));
+        assertEquals(1, locked.size());
+        assertEquals(1L, registrationRepository.countOccupiedByActivityId(ended.getId()));
     }
 
     private Position buildPosition() {

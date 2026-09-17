@@ -36,6 +36,24 @@ public interface RegistrationRepository extends JpaRepository<Registration, Long
                                                             @Param("statuses") List<Integer> statuses);
 
     /**
+     * 行锁批量取活动下指定状态的报名单（散场清场、报名/通过前校验用，锁顺序：活动 → 本批报名）。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM Registration r WHERE r.activityId = :activityId AND r.status IN :statuses")
+    List<Registration> findByActivityIdAndStatusInForUpdate(@Param("activityId") Long activityId,
+                                                            @Param("statuses") List<Integer> statuses);
+
+    /**
+     * 行锁取某志愿者在某岗位下指定状态的报名单（证书有效期改写后立即清场用，锁顺序：岗位 → 报名）。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM Registration r WHERE r.volunteerId = :volunteerId "
+            + "AND r.positionId = :positionId AND r.status IN :statuses")
+    List<Registration> findByVolunteerIdAndPositionIdAndStatusInForUpdate(@Param("volunteerId") Long volunteerId,
+                                                                         @Param("positionId") Long positionId,
+                                                                         @Param("statuses") List<Integer> statuses);
+
+    /**
      * 岗位占编人数：状态为待审批/已通过/审批完成，且有效校验通过
      * （有复核以复核为准，无复核以报名时校验为准）。
      * 退回修改未重提、驳回、能力校验失败、复核失败的已批人员都不计入。
@@ -44,6 +62,12 @@ public interface RegistrationRepository extends JpaRepository<Registration, Long
             + "AND r.status IN (0, 1, 4) "
             + "AND (r.recheckPass = 1 OR (r.recheckPass IS NULL AND r.checkPass = 1))")
     long countOccupiedByPositionId(@Param("positionId") Long positionId);
+
+    /** 活动维度占编人数（同一口径），散场清场后应回落为 0。 */
+    @Query("SELECT COUNT(r) FROM Registration r WHERE r.activityId = :activityId "
+            + "AND r.status IN (0, 1, 4) "
+            + "AND (r.recheckPass = 1 OR (r.recheckPass IS NULL AND r.checkPass = 1))")
+    long countOccupiedByActivityId(@Param("activityId") Long activityId);
 
     /** 一次查全部岗位的占编人数，返回 [positionId, count] 列表 */
     @Query("SELECT r.positionId, COUNT(r) FROM Registration r WHERE r.status IN (0, 1, 4) "

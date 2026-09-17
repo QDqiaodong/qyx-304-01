@@ -103,9 +103,9 @@ CREATE TABLE IF NOT EXISTS approval_flows (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO activities (name, description, start_time, end_time, location, status) VALUES
-('社区环保公益活动', '组织志愿者参与社区垃圾分类、环境清洁等公益活动', '2026-08-01 09:00:00', '2026-08-31 18:00:00', '阳光社区', 1),
-('敬老院关爱行动', '为敬老院老人提供陪伴、日常照料等志愿服务', '2026-08-10 08:00:00', '2026-08-10 17:00:00', '幸福敬老院', 1),
-('交通安全宣传', '协助交警开展交通安全宣传活动', '2026-08-15 09:00:00', '2026-08-15 16:00:00', '市中心广场', 1);
+('社区环保公益活动', '组织志愿者参与社区垃圾分类、环境清洁等公益活动', '2026-09-01 09:00:00', '2026-09-30 18:00:00', '阳光社区', 1),
+('敬老院关爱行动', '为敬老院老人提供陪伴、日常照料等志愿服务', '2026-09-15 08:00:00', '2026-09-20 17:00:00', '幸福敬老院', 1),
+('交通安全宣传', '协助交警开展交通安全宣传活动（已散场，新报名应失败）', '2026-09-10 09:00:00', '2026-09-16 16:00:00', '市中心广场', 1);
 
 INSERT INTO positions (activity_id, name, required_skills, required_certificates, required_hours, min_count, max_count, status) VALUES
 (1, '垃圾分类指导员', '沟通能力,组织能力', '垃圾分类培训证书', 10, 5, 15, 1),
@@ -134,5 +134,5 @@ INSERT INTO volunteer_skills (volunteer_id, skill_name, skill_level) VALUES
 
 INSERT INTO volunteer_certificates (volunteer_id, cert_name, cert_no, issue_date, expire_date) VALUES
 (1, '垃圾分类培训证书', 'LF2026001', '2026-01-15', '2027-01-15'),
-(3, '护理资格证', 'HL2025001', '2025-06-20', '2028-06-20'),
+(3, '护理资格证', 'HL2025001', '2024-09-16', '2026-09-16'),
 (5, '交通安全培训证', 'JT2026001', '2026-03-10', '2027-03-10');

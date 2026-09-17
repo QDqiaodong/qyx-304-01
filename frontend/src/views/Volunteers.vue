@@ -81,11 +81,23 @@
 
       <div style="margin-top: 20px;">
         <h4>证书信息</h4>
-        <el-table :data="volunteerCertificates" border size="small" style="width: 100%;">
+        <el-table :data="volunteerCertificates" border size="small" style="width: 100%;"
+                  :row-class-name="certRowClass">
           <el-table-column prop="certName" label="证书名称" />
           <el-table-column prop="certNo" label="证书编号" />
           <el-table-column prop="issueDate" label="颁发日期" />
-          <el-table-column prop="expireDate" label="有效期至" />
+          <el-table-column label="有效期至" width="180">
+            <template #default="scope">
+              <span>{{ scope.row.expireDate || '长期有效' }}</span>
+              <el-tag v-if="isCertExpired(scope.row.expireDate)" type="danger" size="small"
+                      effect="dark" style="margin-left: 6px;">已过期</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="150">
+            <template #default="scope">
+              <el-button size="small" @click="editCertificate(scope.row)">改有效期</el-button>
+            </template>
+          </el-table-column>
         </el-table>
         <el-button size="small" style="margin-top: 10px;" @click="openCertModal">添加证书</el-button>
       </div>
@@ -106,10 +118,10 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="certModalVisible" title="添加证书" width="400px">
+    <el-dialog v-model="certModalVisible" :title="certEditingId ? '修改证书有效期' : '添加证书'" width="400px">
       <el-form :model="certForm" label-width="80px">
         <el-form-item label="证书名称" required>
-          <el-input v-model="certForm.certName" />
+          <el-input v-model="certForm.certName" :disabled="!!certEditingId" />
         </el-form-item>
         <el-form-item label="证书编号">
           <el-input v-model="certForm.certNo" />
@@ -119,11 +131,12 @@
         </el-form-item>
         <el-form-item label="有效期至">
           <el-date-picker v-model="certForm.expireDate" type="date" value-format="YYYY-MM-DD" />
+          <div style="font-size: 11px; color: #909399;">留空表示长期有效；改成昨天即过期，排班口下一轮扫描立即腾位</div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="certModalVisible = false">取消</el-button>
-        <el-button type="primary" @click="addCertificate">确定</el-button>
+        <el-button type="primary" @click="saveCertificate">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -163,6 +176,7 @@ const skillForm = ref<VolunteerSkill>({
 })
 
 const certModalVisible = ref(false)
+const certEditingId = ref(0)
 const certForm = ref<VolunteerCertificate>({
   id: 0,
   volunteerId: 0,
@@ -172,6 +186,16 @@ const certForm = ref<VolunteerCertificate>({
   expireDate: '',
   createdAt: ''
 })
+
+const isCertExpired = (expireDate?: string) => {
+  if (!expireDate) return false
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return new Date(expireDate) < today
+}
+
+const certRowClass = ({ row }: { row: VolunteerCertificate }) =>
+  isCertExpired(row.expireDate) ? 'cert-expired-row' : ''
 
 const loadVolunteers = async () => {
   const res = await volunteerApi.getAll()
@@ -238,6 +262,7 @@ const openSkillModal = () => {
 }
 
 const openCertModal = () => {
+  certEditingId.value = 0
   certForm.value = {
     id: 0,
     volunteerId: selectedVolunteer.value?.id || 0,
@@ -250,15 +275,26 @@ const openCertModal = () => {
   certModalVisible.value = true
 }
 
-const addSkill = async () => {
-  await volunteerApi.addSkill(selectedVolunteer.value?.id || 0, skillForm.value)
-  skillModalVisible.value = false
+const editCertificate = (cert: VolunteerCertificate) => {
+  certEditingId.value = cert.id
+  certForm.value = { ...cert }
+  certModalVisible.value = true
+}
+
+const saveCertificate = async () => {
+  const volunteerId = selectedVolunteer.value?.id || 0
+  if (certEditingId.value) {
+    await volunteerApi.updateCertificate(volunteerId, certEditingId.value, certForm.value)
+  } else {
+    await volunteerApi.addCertificate(volunteerId, certForm.value)
+  }
+  certModalVisible.value = false
   viewDetail(selectedVolunteer.value!)
 }
 
-const addCertificate = async () => {
-  await volunteerApi.addCertificate(selectedVolunteer.value?.id || 0, certForm.value)
-  certModalVisible.value = false
+const addSkill = async () => {
+  await volunteerApi.addSkill(selectedVolunteer.value?.id || 0, skillForm.value)
+  skillModalVisible.value = false
   viewDetail(selectedVolunteer.value!)
 }
 
@@ -268,5 +304,9 @@ onMounted(loadVolunteers)
 <style scoped>
 .volunteers {
   padding: 20px;
+}
+
+:deep(.cert-expired-row) {
+  background-color: #fff1f0;
 }
 </style>

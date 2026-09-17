@@ -117,6 +117,14 @@ export interface RegistrationDetail {
   effectivePassDesc?: string
   currentApprovalNode: number
   currentApprovalNodeDesc: string
+  /** 现场时效：必备证书是否已过有效期 */
+  certExpired?: boolean
+  /** 现场时效：活动是否已散场 */
+  activityEnded?: boolean
+  /** 是否被时效拦住（证件过期/活动散场），通过按钮必须置灰 */
+  timeBlocked?: boolean
+  /** 被拦原因 */
+  blockReason?: string
   approvalFlows: ApprovalFlowDetail[]
   createdAt: string
   updatedAt: string
@@ -140,6 +148,9 @@ export interface CapabilityCheckResult {
   skillCheck: string[]
   certCheck: string[]
   hoursCheck: string
+  activityCheck?: string
+  activityEnded?: boolean
+  certExpired?: boolean
   message: string
 }
 
@@ -184,6 +195,7 @@ export const volunteerApi = {
   addSkill: (id: number, data: VolunteerSkill) => http.post<VolunteerSkill>(`/volunteers/${id}/skills`, data),
   getSkills: (id: number) => http.get<VolunteerSkill[]>(`/volunteers/${id}/skills`),
   addCertificate: (id: number, data: VolunteerCertificate) => http.post<VolunteerCertificate>(`/volunteers/${id}/certificates`, data),
+  updateCertificate: (id: number, certId: number, data: VolunteerCertificate) => http.put<VolunteerCertificate>(`/volunteers/${id}/certificates/${certId}`, data),
   getCertificates: (id: number) => http.get<VolunteerCertificate[]>(`/volunteers/${id}/certificates`)
 }
 
