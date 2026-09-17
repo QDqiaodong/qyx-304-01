@@ -34,6 +34,29 @@
         <el-table-column prop="volunteerPhone" label="联系方式" />
         <el-table-column prop="activityName" label="活动" />
         <el-table-column prop="positionName" label="岗位" />
+        <el-table-column label="排班闸门" width="150">
+          <template #default="scope">
+            <el-tag v-if="scope.row.activityOngoing === false" type="danger" size="small">
+              活动已散场
+            </el-tag>
+            <el-tag
+              v-for="cert in (scope.row.expiredCertificates || [])"
+              :key="cert"
+              type="danger"
+              size="small"
+              style="margin-top: 2px;"
+            >
+              {{ cert }}已过期
+            </el-tag>
+            <el-tag
+              v-if="scope.row.activityOngoing !== false && !(scope.row.expiredCertificates || []).length"
+              type="success"
+              size="small"
+            >
+              闸门正常
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="能力校验" width="130">
           <template #default="scope">
             <el-tag :type="scope.row.effectivePass === 1 ? 'success' : 'danger'">
@@ -110,11 +133,39 @@
       </el-descriptions>
 
       <el-alert
-        v-if="selectedApproval?.status === 5"
+        v-if="selectedApproval?.status === 5 && selectedApproval?.blockReason === 'ACTIVITY'"
+        type="error"
+        :closable="false"
+        style="margin-top: 12px;"
+        title="活动已经散场：还没批完的通过一律不成立，名额已让出；活动重新开启或延期后方可继续。"
+      />
+      <el-alert
+        v-else-if="selectedApproval?.status === 5 && selectedApproval?.blockReason === 'CERT'"
+        type="error"
+        :closable="false"
+        style="margin-top: 12px;"
+        title="所需证书已过有效期：通过不成立、名额已让出；证件续期重检通过后方可继续。"
+      />
+      <el-alert
+        v-else-if="selectedApproval?.status === 5"
         type="error"
         :closable="false"
         style="margin-top: 12px;"
         title="岗位门槛已更新，该单复核失败并停在能力校验失败：通过动作不成立、名额已让出；门槛放宽重检通过后方可继续。"
+      />
+      <el-alert
+        v-else-if="selectedApproval?.activityOngoing === false"
+        type="error"
+        :closable="false"
+        style="margin-top: 12px;"
+        title="活动已经散场，该单今晚不再计入排班，通过动作不成立。"
+      />
+      <el-alert
+        v-else-if="(selectedApproval?.expiredCertificates || []).length > 0"
+        type="error"
+        :closable="false"
+        style="margin-top: 12px;"
+        :title="`所需证书已过有效期（${(selectedApproval?.expiredCertificates || []).join('、')}），今晚不计入排班，通过动作不成立。`"
       />
       <el-alert
         v-else-if="selectedApproval?.status === 3"
@@ -214,6 +265,13 @@
     </el-dialog>
 
     <el-dialog v-model="approvalModalVisible" title="审批操作" width="500px">
+      <el-alert
+        v-if="approvalGateBlocked"
+        type="error"
+        :closable="false"
+        style="margin-bottom: 12px;"
+        :title="approvalGateMessage"
+      />
       <el-form :model="approvalForm" label-width="80px">
         <el-form-item label="审批人">
           <el-input v-model="approvalForm.approverName" />
@@ -226,7 +284,7 @@
         <el-button @click="approvalModalVisible = false">取消</el-button>
         <el-button type="warning" @click="handleReturn">退回修改</el-button>
         <el-button type="danger" @click="handleReject">驳回</el-button>
-        <el-button type="primary" @click="handlePass">通过</el-button>
+        <el-button type="primary" :disabled="approvalGateBlocked" @click="handlePass">通过</el-button>
       </template>
     </el-dialog>
   </div>
@@ -265,6 +323,22 @@ const approvalForm = ref<ApprovalRequest>({
 const pendingCount = computed(() => approvals.value.filter(a => a.status === 0).length)
 const approvedCount = computed(() => approvals.value.filter(a => a.status === 1 || a.status === 4).length)
 const rejectedCount = computed(() => approvals.value.filter(a => a.status === 2).length)
+
+const approvalGateBlocked = computed(() => {
+  const a = selectedApproval.value
+  if (!a) return true
+  return a.activityOngoing === false || (a.expiredCertificates && a.expiredCertificates.length > 0)
+})
+
+const approvalGateMessage = computed(() => {
+  const a = selectedApproval.value
+  if (!a) return ''
+  if (a.activityOngoing === false) return '活动已经散场，通过不成立'
+  if (a.expiredCertificates && a.expiredCertificates.length > 0) {
+    return `所需证书已过期（${a.expiredCertificates.join('、')}），通过不成立`
+  }
+  return ''
+})
 
 const currentProgress = computed(() => {
   if (!selectedApproval.value) return 0
@@ -348,9 +422,12 @@ const handleReturn = async () => {
 }
 
 const canApprove = (approval: RegistrationDetail) => {
-  // 只有待审批且有效校验（新门槛复核优先）通过的单才能批；
-  // 退回修改未重提、能力校验失败（含复核失败）一律卡不住“通过”
-  return approval.status === 0 && approval.effectivePass === 1
+  // 只有待审批、门槛有效校验通过、活动仍在办且所需证件都在有效期内的单才能批；
+  // 退回修改未重提、能力校验失败（含复核失败）、证件过期、活动散场一律点不动「通过」
+  return approval.status === 0
+    && approval.effectivePass === 1
+    && approval.activityOngoing !== false
+    && !(approval.expiredCertificates && approval.expiredCertificates.length > 0)
 }
 
 const getStatusType = (status: number) => {

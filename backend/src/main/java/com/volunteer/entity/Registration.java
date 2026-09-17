@@ -55,6 +55,13 @@ public class Registration {
     @Column(name = "resume_node")
     private Integer resumeNode;
 
+    /**
+     * 停在能力校验失败的原因：threshold=岗位门槛改写，cert=所需证书过期，activity=活动已散场。
+     * 仅对应闸门解除后才允许回到被卡前节点。
+     */
+    @Column(name = "block_reason", length = 20)
+    private String blockReason;
+
     @Column(name = "current_approval_node")
     private Integer currentApprovalNode;
 

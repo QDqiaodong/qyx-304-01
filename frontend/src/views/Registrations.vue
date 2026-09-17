@@ -28,6 +28,29 @@
         <el-table-column prop="volunteerPhone" label="联系方式" />
         <el-table-column prop="activityName" label="活动" />
         <el-table-column prop="positionName" label="岗位" />
+        <el-table-column label="排班闸门" width="150">
+          <template #default="scope">
+            <el-tag v-if="scope.row.activityOngoing === false" type="danger" size="small">
+              活动已散场
+            </el-tag>
+            <el-tag
+              v-for="cert in (scope.row.expiredCertificates || [])"
+              :key="cert"
+              type="danger"
+              size="small"
+              style="margin-top: 2px;"
+            >
+              {{ cert }}已过期
+            </el-tag>
+            <el-tag
+              v-if="scope.row.activityOngoing !== false && !(scope.row.expiredCertificates || []).length"
+              type="success"
+              size="small"
+            >
+              闸门正常
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="能力校验" width="120">
           <template #default="scope">
             <el-tag :type="scope.row.effectivePass === 1 ? 'success' : 'danger'">
@@ -72,8 +95,20 @@
         </el-form-item>
         <el-form-item label="选择活动" required>
           <el-select v-model="applyForm.activityId" placeholder="请选择活动" @change="onActivityChange">
-            <el-option v-for="a in activities" :key="a.id" :label="a.name" :value="a.id" />
+            <el-option
+              v-for="a in activities"
+              :key="a.id"
+              :label="a.name + (isActivityEnded(a) ? '（已散场）' : '')"
+              :value="a.id"
+            />
           </el-select>
+          <el-alert
+            v-if="selectedApplyActivity && isActivityEnded(selectedApplyActivity)"
+            type="error"
+            :closable="false"
+            style="margin-top: 6px;"
+            title="活动已经散场（结束钟点已过或状态为已结束），新报名送不进来。"
+          />
         </el-form-item>
         <el-form-item label="选择岗位" required>
           <el-select v-model="applyForm.positionId" placeholder="请选择岗位" @change="onPositionChange">
@@ -104,7 +139,11 @@
 
       <template #footer>
         <el-button @click="applyModalVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!capabilityCheckResult?.pass" @click="submitApply">确认报名</el-button>
+        <el-button
+          type="primary"
+          :disabled="!capabilityCheckResult?.pass || applyActivityEnded"
+          @click="submitApply"
+        >确认报名</el-button>
       </template>
     </el-dialog>
 
@@ -215,11 +254,39 @@
           </div>
         </div>
         <el-alert
-          v-if="selectedRegistration?.status === 5"
+          v-if="selectedRegistration?.status === 5 && selectedRegistration?.blockReason === 'ACTIVITY'"
+          type="error"
+          :closable="false"
+          style="margin-top: 10px;"
+          title="活动已经散场：还没批完的通过一律不成立，名额已让出。"
+        />
+        <el-alert
+          v-else-if="selectedRegistration?.status === 5 && selectedRegistration?.blockReason === 'CERT'"
+          type="error"
+          :closable="false"
+          style="margin-top: 10px;"
+          title="所需证书已过有效期：待审停住、通过不成立，名额已让出。"
+        />
+        <el-alert
+          v-else-if="selectedRegistration?.status === 5"
           type="error"
           :closable="false"
           style="margin-top: 10px;"
           title="该单在岗位门槛更新后复核失败，已停在能力校验失败并让出名额，待门槛放宽重检通过后才能继续审批。"
+        />
+        <el-alert
+          v-else-if="selectedRegistration?.activityOngoing === false"
+          type="error"
+          :closable="false"
+          style="margin-top: 10px;"
+          title="活动已经散场，该单今晚不再计入排班，通过动作不成立。"
+        />
+        <el-alert
+          v-else-if="(selectedRegistration?.expiredCertificates || []).length > 0"
+          type="error"
+          :closable="false"
+          style="margin-top: 10px;"
+          :title="`所需证书已过有效期（${(selectedRegistration?.expiredCertificates || []).join('、')}），今晚不计入排班。`"
         />
       </div>
 
@@ -278,7 +345,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Check, Close, RefreshRight } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { registrationApi, activityApi, positionApi, volunteerApi, type RegistrationDetail, type Activity, type Position, type Volunteer, type CapabilityCheckResult, type RegistrationRequest } from '@/api'
@@ -308,6 +375,15 @@ const applyForm = ref<RegistrationRequest>({
 })
 
 const capabilityCheckResult = ref<CapabilityCheckResult | null>(null)
+
+// 活动散场口径与后端 GateRules 一致：状态非进行中，或结束钟点已过
+const isActivityEnded = (a: Activity) =>
+  a.status !== 1 || (!!a.endTime && new Date(a.endTime.replace(' ', 'T')) < new Date())
+
+const selectedApplyActivity = computed(() =>
+  activities.value.find(a => a.id === applyForm.value.activityId) || null)
+const applyActivityEnded = computed(() =>
+  !!selectedApplyActivity.value && isActivityEnded(selectedApplyActivity.value))
 
 const loadRegistrations = async () => {
   let res
@@ -369,9 +445,15 @@ const openApplyModal = () => {
 }
 
 const submitApply = async () => {
-  await registrationApi.create(applyForm.value)
-  applyModalVisible.value = false
-  loadRegistrations()
+  try {
+    await registrationApi.create(applyForm.value)
+    applyModalVisible.value = false
+    loadRegistrations()
+  } catch (e: unknown) {
+    const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      || '报名失败'
+    ElMessage.error(msg)
+  }
 }
 
 const viewDetail = (registration: RegistrationDetail) => {

@@ -9,11 +9,11 @@ import com.volunteer.entity.*;
 import com.volunteer.enums.ApprovalNode;
 import com.volunteer.enums.ApprovalStatus;
 import com.volunteer.repository.*;
+import com.volunteer.util.GateRules;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -44,8 +44,20 @@ public class RegistrationService {
     @Autowired
     private PositionCacheService positionCacheService;
 
+    @Autowired
+    private RosterEligibilityService rosterEligibilityService;
+
     @Transactional
     public Registration createRegistration(RegistrationRequest request) {
+        // 闸门一：活动必须仍在办。结束钟点一过，新报名一律送不进来
+        Activity activity = activityRepository.findById(request.getActivityId()).orElse(null);
+        if (activity == null) {
+            throw new IllegalArgumentException("活动不存在");
+        }
+        if (!GateRules.isOngoing(activity)) {
+            throw new IllegalStateException("活动已结束，不能再报名");
+        }
+
         CapabilityCheckResult checkResult = capabilityValidationService.validate(
                 request.getVolunteerId(), request.getPositionId());
 
@@ -82,7 +94,7 @@ public class RegistrationService {
 
     /**
      * 退回修改后重新送审：
-     * 仅退回状态的单子可重提；能力校验按当前最新门槛重跑，
+     * 仅退回状态的单子可重提；活动已散场直接失败；能力校验按当前最新门槛 + 今日证件时效重跑，
      * 通过则清空旧审批记录、从组长节点两个审批节点全部从头来，绝不接回退回前节点；
      * 不通过则停在能力校验失败，不占名额。重提成功前该单一直不占岗位人数。
      */
@@ -93,7 +105,13 @@ public class RegistrationService {
             throw new IllegalArgumentException("报名单不存在");
         }
 
-        // 锁顺序与改门槛、通过动作一致：先岗位后报名，防止互锁
+        // 锁顺序与改门槛、通过动作一致：先活动、再岗位、后报名，防止互锁
+        Activity activity = activityRepository.findByIdForUpdate(unlocked.getActivityId())
+                .orElseThrow(() -> new IllegalArgumentException("活动不存在"));
+        if (!GateRules.isOngoing(activity)) {
+            throw new IllegalStateException("活动已结束，不能重新送审");
+        }
+
         Position position = positionRepository.findByIdForUpdate(unlocked.getPositionId())
                 .orElseThrow(() -> new IllegalArgumentException("岗位不存在"));
 
@@ -104,7 +122,8 @@ public class RegistrationService {
         }
 
         CapabilityCheckResult checkResult =
-                capabilityValidationService.validateAgainstPosition(registration.getVolunteerId(), position);
+                capabilityValidationService.validateAgainstPosition(
+                        registration.getVolunteerId(), position, java.time.LocalDate.now(), true);
 
         if (applyMessage != null) {
             registration.setApplyMessage(applyMessage);
@@ -116,6 +135,7 @@ public class RegistrationService {
         registration.setRecheckResult(null);
         registration.setRecheckPass(null);
         registration.setResumeNode(null);
+        registration.setBlockReason(null);
 
         // 旧审批记录一律删除：两个审批节点从头重跑，不许接着退回前的节点批
         approvalFlowRepository.deleteByRegistrationId(registrationId);
@@ -165,7 +185,7 @@ public class RegistrationService {
         detail.setStatus(registration.getStatus());
         detail.setStatusDesc(ApprovalStatus.fromCode(registration.getStatus()).getDesc());
         detail.setCheckPass(registration.getCheckPass());
-        detail.setCheckPassDesc(registration.getCheckPass() == 1 ? "通过" : "未通过");
+        detail.setCheckPassDesc(registration.getCheckPass() != null && registration.getCheckPass() == 1 ? "通过" : "未通过");
         detail.setCapabilityCheckResult(registration.getCapabilityCheckResult());
         detail.setRequirementVersionAtApply(registration.getRequirementVersionAtApply());
         detail.setRecheckResult(registration.getRecheckResult());
@@ -179,10 +199,24 @@ public class RegistrationService {
                 : (registration.getCheckPass() == null ? 0 : registration.getCheckPass());
         detail.setEffectivePass(effectivePass);
         detail.setEffectivePassDesc(effectivePass == 1 ? "通过" : "未通过");
+        detail.setBlockReason(registration.getBlockReason());
         detail.setCurrentApprovalNode(registration.getCurrentApprovalNode());
         detail.setCurrentApprovalNodeDesc(ApprovalNode.fromLevel(registration.getCurrentApprovalNode()).getName());
         detail.setCreatedAt(registration.getCreatedAt());
         detail.setUpdatedAt(registration.getUpdatedAt());
+
+        // 排班两道实时闸门：活动是否在办、所需证件此刻是否有效。
+        // 列表据此涂过期色、停用通过按钮；满员人数也以同一口径实时腾位。
+        RosterEligibilityService.Eligibility eligibility = rosterEligibilityService.evaluate(registration);
+        if (eligibility != null) {
+            detail.setActivityOngoing(eligibility.isActivityOngoing());
+            detail.setExpiredCertificates(eligibility.getExpiredCertificates());
+            detail.setRosterEligible(eligibility.isEligible());
+        } else {
+            detail.setActivityOngoing(false);
+            detail.setExpiredCertificates(java.util.List.of());
+            detail.setRosterEligible(false);
+        }
 
         List<ApprovalFlow> flows = approvalFlowRepository.findByRegistrationIdOrderByNodeLevelAsc(registrationId);
         detail.setApprovalFlows(flows.stream().map(this::convertToApprovalFlowDetail).collect(Collectors.toList()));

@@ -17,6 +17,9 @@ public class CapabilityCheckResult {
 
     private List<String> certCheck;
 
+    /** 本次校验时已过期的岗位所需证书名称（证件时效闸门） */
+    private List<String> expiredCertificates;
+
     private String hoursCheck;
 
     private String message;

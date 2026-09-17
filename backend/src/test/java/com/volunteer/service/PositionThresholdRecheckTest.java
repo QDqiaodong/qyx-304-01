@@ -1,12 +1,12 @@
 package com.volunteer.service;
 
 import com.volunteer.dto.response.CapabilityCheckResult;
-import com.volunteer.entity.ApprovalFlow;
+import com.volunteer.entity.Activity;
 import com.volunteer.entity.Position;
 import com.volunteer.entity.Registration;
 import com.volunteer.enums.ApprovalNode;
 import com.volunteer.enums.ApprovalStatus;
-import com.volunteer.repository.ApprovalFlowRepository;
+import com.volunteer.repository.ActivityRepository;
 import com.volunteer.repository.PositionRepository;
 import com.volunteer.repository.RegistrationRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,8 +14,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -40,19 +42,27 @@ class PositionThresholdRecheckTest {
     @Mock
     private RegistrationRepository registrationRepository;
     @Mock
+    private ActivityRepository activityRepository;
+    @Mock
     private CapabilityValidationService capabilityValidationService;
     @Mock
     private PositionCacheService positionCacheService;
+    @Mock
+    private RosterEligibilityService rosterEligibilityService;
+    @Spy
+    private RegistrationRecheckSupport recheckSupport = new RegistrationRecheckSupport();
 
     @InjectMocks
     private PositionService positionService;
 
     private Position existing;
+    private Activity activity;
 
     @BeforeEach
     void setUp() {
         existing = new Position();
         existing.setId(10L);
+        existing.setActivityId(2L);
         existing.setName("急救岗");
         existing.setRequiredCertificates(null);
         existing.setRequiredSkills(null);
@@ -61,6 +71,12 @@ class PositionThresholdRecheckTest {
         existing.setMaxCount(10);
         existing.setRequirementVersion(1);
         existing.setStatus(1);
+
+        activity = new Activity();
+        activity.setId(2L);
+        activity.setStatus(1);
+        activity.setStartTime(LocalDateTime.now().minusDays(1));
+        activity.setEndTime(LocalDateTime.now().plusDays(1));
     }
 
     private Position inputWithFirstAidCert() {
@@ -79,6 +95,7 @@ class PositionThresholdRecheckTest {
         Registration r = new Registration();
         r.setId(id);
         r.setVolunteerId(id);
+        r.setActivityId(2L);
         r.setPositionId(10L);
         r.setCheckPass(1);
         r.setStatus(status);
@@ -105,11 +122,14 @@ class PositionThresholdRecheckTest {
 
         when(positionRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(existing));
         when(positionRepository.save(any(Position.class))).thenAnswer(i -> i.getArgument(0));
+        when(activityRepository.findById(2L)).thenReturn(Optional.of(activity));
         when(registrationRepository.findByPositionIdAndStatusInForUpdate(eq(10L), any()))
                 .thenReturn(List.of(inflight, completed));
         // 两个人在新「急救证」门槛下都不满足
-        when(capabilityValidationService.validateAgainstPosition(eq(1L), any(Position.class))).thenReturn(failResult());
-        when(capabilityValidationService.validateAgainstPosition(eq(2L), any(Position.class))).thenReturn(failResult());
+        when(capabilityValidationService.validateAgainstPosition(eq(1L), any(Position.class),
+                any(java.time.LocalDate.class), eq(true))).thenReturn(failResult());
+        when(capabilityValidationService.validateAgainstPosition(eq(2L), any(Position.class),
+                any(java.time.LocalDate.class), eq(true))).thenReturn(failResult());
 
         positionService.updatePosition(10L, inputWithFirstAidCert());
 
@@ -139,6 +159,7 @@ class PositionThresholdRecheckTest {
         Registration blocked = reg(3L, ApprovalStatus.CHECK_FAILED.getCode(),
                 ApprovalNode.CAPABILITY_CHECK.getLevel());
         blocked.setResumeNode(ApprovalNode.LEADER.getLevel());
+        blocked.setBlockReason("THRESHOLD");
 
         Position relaxedInput = new Position();
         relaxedInput.setName("急救岗");
@@ -151,9 +172,11 @@ class PositionThresholdRecheckTest {
 
         when(positionRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(existing));
         when(positionRepository.save(any(Position.class))).thenAnswer(i -> i.getArgument(0));
+        when(activityRepository.findById(2L)).thenReturn(Optional.of(activity));
         when(registrationRepository.findByPositionIdAndStatusInForUpdate(eq(10L), any()))
                 .thenReturn(List.of(blocked));
-        when(capabilityValidationService.validateAgainstPosition(eq(3L), any(Position.class)))
+        when(capabilityValidationService.validateAgainstPosition(eq(3L), any(Position.class),
+                any(java.time.LocalDate.class), eq(true)))
                 .thenReturn(passResult());
 
         positionService.updatePosition(10L, relaxedInput);

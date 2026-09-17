@@ -7,6 +7,7 @@ import com.volunteer.entity.VolunteerSkill;
 import com.volunteer.repository.VolunteerCertificateRepository;
 import com.volunteer.repository.VolunteerRepository;
 import com.volunteer.repository.VolunteerSkillRepository;
+import com.volunteer.service.CertificateService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,6 +27,9 @@ public class VolunteerController {
 
     @Autowired
     private VolunteerCertificateRepository volunteerCertificateRepository;
+
+    @Autowired
+    private CertificateService certificateService;
 
     @GetMapping
     public ApiResponse<List<Volunteer>> getAllVolunteers() {
@@ -94,6 +98,22 @@ public class VolunteerController {
     public ApiResponse<VolunteerCertificate> addCertificate(@PathVariable Long id, @RequestBody VolunteerCertificate certificate) {
         certificate.setVolunteerId(id);
         return ApiResponse.success(volunteerCertificateRepository.save(certificate));
+    }
+
+    /**
+     * 修改证书（含有效期）：同事务重检持证人全部在途/已批报名。
+     * 改后已过期 → 在途单通过不成立并立即腾位；续期 → 被证件闸门卡住的单回到被卡前节点。
+     * 与「通过」按同一加锁顺序串行，同一秒叠提交账上只许一种结局。
+     */
+    @PutMapping("/{id}/certificates/{certId}")
+    public ApiResponse<VolunteerCertificate> updateCertificate(@PathVariable Long id,
+                                                                @PathVariable Long certId,
+                                                                @RequestBody VolunteerCertificate certificate) {
+        try {
+            return ApiResponse.success(certificateService.updateCertificate(certId, certificate));
+        } catch (IllegalArgumentException e) {
+            return ApiResponse.error(404, e.getMessage());
+        }
     }
 
     @GetMapping("/{id}/certificates")

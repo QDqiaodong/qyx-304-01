@@ -81,13 +81,36 @@
 
       <div style="margin-top: 20px;">
         <h4>证书信息</h4>
-        <el-table :data="volunteerCertificates" border size="small" style="width: 100%;">
+        <el-table :data="volunteerCertificates" border size="small" style="width: 100%;"
+                  :row-class-name="certRowClass">
           <el-table-column prop="certName" label="证书名称" />
           <el-table-column prop="certNo" label="证书编号" />
           <el-table-column prop="issueDate" label="颁发日期" />
-          <el-table-column prop="expireDate" label="有效期至" />
+          <el-table-column label="有效期至" width="220">
+            <template #default="scope">
+              <span :style="{ color: isCertExpired(scope.row) ? '#ff4d4f' : '#303133', fontWeight: 600 }">
+                {{ scope.row.expireDate || '长期有效' }}
+              </span>
+              <el-tag v-if="isCertExpired(scope.row)" type="danger" size="small" style="margin-left: 6px;">
+                已过期
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="100">
+            <template #default="scope">
+              <el-button size="small" type="primary" link @click="openEditCertModal(scope.row)">
+                编辑有效期
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
         <el-button size="small" style="margin-top: 10px;" @click="openCertModal">添加证书</el-button>
+        <el-alert
+          type="info"
+          :closable="false"
+          style="margin-top: 8px;"
+          title="改证书有效期会同事务立即重检持证人的在途/已批报名：改后已过期则通过不成立并立即腾位，续期后被卡的单回到被卡前节点。"
+        />
       </div>
     </el-dialog>
 
@@ -124,6 +147,33 @@
       <template #footer>
         <el-button @click="certModalVisible = false">取消</el-button>
         <el-button type="primary" @click="addCertificate">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="editCertModalVisible" title="编辑证书有效期" width="400px">
+      <el-alert
+        type="warning"
+        :closable="false"
+        style="margin-bottom: 12px;"
+        title="保存后立即重检持证人全部在途/已批报名，今晚排班人数随之变动。"
+      />
+      <el-form :model="editCertForm" label-width="80px">
+        <el-form-item label="证书名称">
+          <el-input v-model="editCertForm.certName" />
+        </el-form-item>
+        <el-form-item label="证书编号">
+          <el-input v-model="editCertForm.certNo" />
+        </el-form-item>
+        <el-form-item label="颁发日期">
+          <el-date-picker v-model="editCertForm.issueDate" type="date" value-format="YYYY-MM-DD" />
+        </el-form-item>
+        <el-form-item label="有效期至">
+          <el-date-picker v-model="editCertForm.expireDate" type="date" value-format="YYYY-MM-DD" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editCertModalVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveCertificate">保存并重检</el-button>
       </template>
     </el-dialog>
   </div>
@@ -172,6 +222,24 @@ const certForm = ref<VolunteerCertificate>({
   expireDate: '',
   createdAt: ''
 })
+
+const editCertModalVisible = ref(false)
+const editCertForm = ref<VolunteerCertificate>({
+  id: 0,
+  volunteerId: 0,
+  certName: '',
+  certNo: '',
+  issueDate: '',
+  expireDate: '',
+  createdAt: ''
+})
+
+// 过期色：有效期早于今天即过期（与后端 GateRules 同日口径）
+const isCertExpired = (cert: VolunteerCertificate) =>
+  !!cert.expireDate && cert.expireDate < new Date().toISOString().slice(0, 10)
+
+const certRowClass = ({ row }: { row: VolunteerCertificate }) =>
+  isCertExpired(row) ? 'cert-expired-row' : ''
 
 const loadVolunteers = async () => {
   const res = await volunteerApi.getAll()
@@ -262,11 +330,32 @@ const addCertificate = async () => {
   viewDetail(selectedVolunteer.value!)
 }
 
+const openEditCertModal = (cert: VolunteerCertificate) => {
+  editCertForm.value = { ...cert }
+  editCertModalVisible.value = true
+}
+
+const saveCertificate = async () => {
+  const volunteerId = selectedVolunteer.value?.id || 0
+  await volunteerApi.updateCertificate(volunteerId, editCertForm.value.id, editCertForm.value)
+  editCertModalVisible.value = false
+  await viewDetail(selectedVolunteer.value!)
+  loadVolunteers()
+}
+
 onMounted(loadVolunteers)
 </script>
 
 <style scoped>
 .volunteers {
   padding: 20px;
+}
+
+:deep(.cert-expired-row) {
+  background-color: #fff2f0 !important;
+}
+
+:deep(.cert-expired-row td) {
+  color: #ff4d4f;
 }
 </style>

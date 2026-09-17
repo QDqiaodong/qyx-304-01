@@ -1,18 +1,19 @@
 package com.volunteer.service;
 
-import com.alibaba.fastjson.JSON;
 import com.volunteer.dto.response.CapabilityCheckResult;
+import com.volunteer.entity.Activity;
 import com.volunteer.entity.Position;
 import com.volunteer.entity.Registration;
-import com.volunteer.enums.ApprovalNode;
 import com.volunteer.enums.ApprovalStatus;
+import com.volunteer.enums.BlockReason;
+import com.volunteer.repository.ActivityRepository;
 import com.volunteer.repository.PositionRepository;
 import com.volunteer.repository.RegistrationRepository;
+import com.volunteer.util.GateRules;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -21,7 +22,7 @@ import java.util.Map;
  *
  * 门槛（技能/证书/服务时长）加严或改写，与在途报名的重检绑在同一条事务里：
  * 先锁岗位行（version+1），再锁该岗位全部在途/已批报名并逐单按新门槛复核。
- * 与「通过」动作约定同一加锁顺序（岗位 → 报名），二者并发时账上只许出现一种结局。
+ * 与「通过」动作约定同一加锁顺序（活动 → 岗位 → 报名），二者并发时账上只许出现一种结局。
  */
 @Service
 public class PositionService {
@@ -32,7 +33,7 @@ public class PositionService {
                     ApprovalStatus.APPROVED.getCode(),
                     ApprovalStatus.COMPLETED.getCode());
 
-    /** 需要随门槛改动立即重检的状态：在途单 + 已批完的人 */
+    /** 需要随门槛改动立即重检的状态：在途单 + 已批完的人 + 此前被闸门卡住的单 */
     private static final List<Integer> RECHECK_STATUSES =
             List.of(ApprovalStatus.PENDING.getCode(),
                     ApprovalStatus.APPROVED.getCode(),
@@ -46,10 +47,19 @@ public class PositionService {
     private RegistrationRepository registrationRepository;
 
     @Autowired
+    private ActivityRepository activityRepository;
+
+    @Autowired
     private CapabilityValidationService capabilityValidationService;
 
     @Autowired
     private PositionCacheService positionCacheService;
+
+    @Autowired
+    private RosterEligibilityService rosterEligibilityService;
+
+    @Autowired
+    private RegistrationRecheckSupport recheckSupport;
 
     /**
      * 更新岗位。门槛字段（技能/证书/服务时长）任一发生变化即 bump version，
@@ -100,46 +110,31 @@ public class PositionService {
 
     /**
      * 门槛已在本事务内落库（岗位行锁持有中），对在途/已批报名逐单复核。
-     * 入参 position 为行锁读出的最新岗位，志愿者技能/证书/时长也在同一快照读取。
+     * 证件时效按「今天」现场核，活动是否在办也现场判，三道闸门一次过账。
      */
     private void recheckInTransaction(Position position) {
         List<Registration> registrations = registrationRepository.findByPositionIdAndStatusInForUpdate(
                 position.getId(), RECHECK_STATUSES);
 
+        Activity activity = activityRepository.findById(position.getActivityId()).orElse(null);
+        boolean ongoing = GateRules.isOngoing(activity);
+
         for (Registration registration : registrations) {
+            // 报名行锁持有中，证件以 FOR UPDATE 读出（报名 → 证件同序），
+            // 与证件有效期写入并发时拿到的一定是最新有效期
             CapabilityCheckResult result = capabilityValidationService.validateAgainstPosition(
-                    registration.getVolunteerId(), position);
+                    registration.getVolunteerId(), position, java.time.LocalDate.now(), true);
 
-            registration.setRecheckResult(JSON.toJSONString(result));
-            registration.setRecheckPass(result.getPass() ? 1 : 0);
-
-            Integer status = registration.getStatus();
-            if (result.getPass()) {
-                // 此前因收紧被卡在能力校验失败的在途单，放宽后恢复到被卡前节点重新占编
-                if (ApprovalStatus.CHECK_FAILED.getCode().equals(status)
-                        && registration.getResumeNode() != null) {
-                    registration.setStatus(ApprovalStatus.PENDING.getCode());
-                    registration.setCurrentApprovalNode(registration.getResumeNode());
-                    registration.setResumeNode(null);
-                }
-                // 已批完的人复核通过：审批结果不动，继续占编
-                registrationRepository.save(registration);
+            if (ApprovalStatus.CHECK_FAILED.getCode().equals(registration.getStatus())
+                    && Boolean.TRUE.equals(result.getPass()) && ongoing) {
+                // 此前被卡（门槛/证件/活动）的单在门槛放宽后尝试恢复，
+                // 只有被卡原因正是门槛且另两道闸门仍过才放行
+                recheckSupport.resumeIfCleared(registration, result, ongoing, BlockReason.THRESHOLD);
             } else {
-                if (ApprovalStatus.COMPLETED.getCode().equals(status)
-                        || ApprovalStatus.APPROVED.getCode().equals(status)) {
-                    // 已经批完的人不必清退：保留审批结果与节点，仅靠 recheckPass=0 让出满员名额；
-                    // save 必须执行，否则复核失败结论不落库、名额仍被占着
-                    registrationRepository.save(registration);
-                    continue;
-                }
-                // 在途单（含此前被卡的）：停在能力校验失败，通过动作直接不成立
-                if (!ApprovalStatus.CHECK_FAILED.getCode().equals(status)) {
-                    registration.setResumeNode(registration.getCurrentApprovalNode());
-                }
-                registration.setStatus(ApprovalStatus.CHECK_FAILED.getCode());
-                registration.setCurrentApprovalNode(ApprovalNode.CAPABILITY_CHECK.getLevel());
-                registrationRepository.save(registration);
+                // 活动散场或复核不过：统一落账（已批完仅让出名额，在途单停住）
+                recheckSupport.applyLiveOutcome(registration, result, ongoing);
             }
+            registrationRepository.save(registration);
         }
     }
 
@@ -164,17 +159,17 @@ public class PositionService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    // ---------- 占编人数（满员口径唯一入口） ----------
+    // ---------- 占编人数（排班口实时满员口径唯一入口） ----------
 
     public long getOccupiedCount(Long positionId) {
-        return registrationRepository.countOccupiedByPositionId(positionId);
+        return rosterEligibilityService.countEligible(positionId);
     }
 
     public Position attachOccupancy(Position position) {
         if (position == null) {
             return null;
         }
-        long occupied = registrationRepository.countOccupiedByPositionId(position.getId());
+        long occupied = rosterEligibilityService.countEligible(position.getId());
         position.setOccupiedCount((int) occupied);
         int max = position.getMaxCount() == null ? 0 : position.getMaxCount();
         position.setFull(occupied >= max && max > 0);
@@ -185,10 +180,7 @@ public class PositionService {
         if (positions == null || positions.isEmpty()) {
             return positions;
         }
-        Map<Long, Long> counts = new HashMap<>();
-        for (Object[] row : registrationRepository.countOccupiedGroupByPosition()) {
-            counts.put((Long) row[0], (Long) row[1]);
-        }
+        Map<Long, Long> counts = rosterEligibilityService.countEligibleGroupByPosition();
         for (Position position : positions) {
             long occupied = counts.getOrDefault(position.getId(), 0L);
             position.setOccupiedCount((int) occupied);

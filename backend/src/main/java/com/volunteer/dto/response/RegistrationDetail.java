@@ -53,6 +53,18 @@ public class RegistrationDetail {
 
     private String effectivePassDesc;
 
+    /** 停在能力校验失败的原因：THRESHOLD 门槛 / CERT 证件过期 / ACTIVITY 活动散场 */
+    private String blockReason;
+
+    /** 所属活动此刻是否仍在办（排班实时闸门，列表据此置灰） */
+    private Boolean activityOngoing;
+
+    /** 岗位所需证书中此刻已过期的证书名称列表 */
+    private List<String> expiredCertificates;
+
+    /** 排班今晚是否可到岗：活动在办且所需证件均在有效期内 */
+    private Boolean rosterEligible;
+
     private Integer currentApprovalNode;
 
     private String currentApprovalNodeDesc;

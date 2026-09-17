@@ -1,6 +1,7 @@
 package com.volunteer.service;
 
 import com.volunteer.dto.response.CapabilityCheckResult;
+import com.volunteer.entity.Activity;
 import com.volunteer.entity.Position;
 import com.volunteer.entity.Registration;
 import com.volunteer.enums.ApprovalNode;
@@ -17,10 +18,13 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -41,11 +45,13 @@ class RegistrationResubmitTest {
     @Mock private CapabilityValidationService capabilityValidationService;
     @Mock private ApprovalFlowService approvalFlowService;
     @Mock private PositionCacheService positionCacheService;
+    @Mock private RosterEligibilityService rosterEligibilityService;
 
     @InjectMocks
     private RegistrationService registrationService;
 
     private Position position;
+    private Activity activity;
     private Registration returned;
 
     @BeforeEach
@@ -54,6 +60,12 @@ class RegistrationResubmitTest {
         position.setId(10L);
         position.setRequirementVersion(3);
         position.setRequiredCertificates("急救证");
+
+        activity = new Activity();
+        activity.setId(2L);
+        activity.setStatus(1);
+        activity.setStartTime(LocalDateTime.now().minusDays(1));
+        activity.setEndTime(LocalDateTime.now().plusDays(1));
 
         returned = new Registration();
         returned.setId(100L);
@@ -80,9 +92,11 @@ class RegistrationResubmitTest {
     @Test
     void resubmit_passing_rebuilds_flows_from_leader_and_marks_pending() {
         when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
+        when(activityRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(activity));
         when(positionRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(position));
         when(registrationRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(returned));
-        when(capabilityValidationService.validateAgainstPosition(5L, position)).thenReturn(pass());
+        when(capabilityValidationService.validateAgainstPosition(eq(5L), eq(position),
+                any(java.time.LocalDate.class), eq(true))).thenReturn(pass());
         when(registrationRepository.save(returned)).thenReturn(returned);
         when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
         when(approvalFlowRepository.findByRegistrationIdOrderByNodeLevelAsc(100L)).thenReturn(java.util.List.of());
@@ -107,9 +121,11 @@ class RegistrationResubmitTest {
     @Test
     void resubmit_failing_is_rejected_and_creates_no_flow() {
         when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
+        when(activityRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(activity));
         when(positionRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(position));
         when(registrationRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(returned));
-        when(capabilityValidationService.validateAgainstPosition(5L, position)).thenReturn(fail());
+        when(capabilityValidationService.validateAgainstPosition(eq(5L), eq(position),
+                any(java.time.LocalDate.class), eq(true))).thenReturn(fail());
         when(registrationRepository.save(returned)).thenReturn(returned);
         when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
         when(approvalFlowRepository.findByRegistrationIdOrderByNodeLevelAsc(100L)).thenReturn(java.util.List.of());
@@ -127,10 +143,24 @@ class RegistrationResubmitTest {
     void non_returned_registration_cannot_resubmit() {
         returned.setStatus(ApprovalStatus.PENDING.getCode());
         when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
+        when(activityRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(activity));
         when(positionRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(position));
         when(registrationRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(returned));
 
         assertThrows(IllegalStateException.class, () -> registrationService.resubmit(100L, null));
         verify(approvalFlowRepository, never()).deleteByRegistrationId(anyLong());
+    }
+
+    @Test
+    void resubmit_fails_when_activity_has_ended() {
+        activity.setStatus(0);
+        when(registrationRepository.findById(100L)).thenReturn(Optional.of(returned));
+        when(activityRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(activity));
+
+        assertThrows(IllegalStateException.class, () -> registrationService.resubmit(100L, null));
+        verify(approvalFlowRepository, never()).deleteByRegistrationId(anyLong());
+        verify(capabilityValidationService, never()).validateAgainstPosition(
+                anyLong(), any(Position.class), any(java.time.LocalDate.class),
+                org.mockito.ArgumentMatchers.anyBoolean());
     }
 }

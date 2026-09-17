@@ -115,6 +115,14 @@ export interface RegistrationDetail {
   currentRequirementVersion?: number
   effectivePass?: number
   effectivePassDesc?: string
+  /** 停在能力校验失败的原因：THRESHOLD 门槛 / CERT 证件过期 / ACTIVITY 活动散场 */
+  blockReason?: string | null
+  /** 所属活动此刻是否仍在办 */
+  activityOngoing?: boolean
+  /** 岗位所需证书中此刻已过期的证书名称 */
+  expiredCertificates?: string[]
+  /** 排班今晚是否可到岗（活动在办且证件有效） */
+  rosterEligible?: boolean
   currentApprovalNode: number
   currentApprovalNodeDesc: string
   approvalFlows: ApprovalFlowDetail[]
@@ -139,6 +147,8 @@ export interface CapabilityCheckResult {
   pass: boolean
   skillCheck: string[]
   certCheck: string[]
+  /** 本次校验时已过期的岗位所需证书名称 */
+  expiredCertificates?: string[]
   hoursCheck: string
   message: string
 }
@@ -184,6 +194,9 @@ export const volunteerApi = {
   addSkill: (id: number, data: VolunteerSkill) => http.post<VolunteerSkill>(`/volunteers/${id}/skills`, data),
   getSkills: (id: number) => http.get<VolunteerSkill[]>(`/volunteers/${id}/skills`),
   addCertificate: (id: number, data: VolunteerCertificate) => http.post<VolunteerCertificate>(`/volunteers/${id}/certificates`, data),
+  /** 改证书（含有效期）：后端同事务重检持证人在途/已批报名 */
+  updateCertificate: (id: number, certId: number, data: VolunteerCertificate) =>
+    http.put<VolunteerCertificate>(`/volunteers/${id}/certificates/${certId}`, data),
   getCertificates: (id: number) => http.get<VolunteerCertificate[]>(`/volunteers/${id}/certificates`)
 }
 
